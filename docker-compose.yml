@@ -1,0 +1,13 @@
+services:
+  gateway:
+    build: .
+    image: scalepulse/gateway:0.1.0
+    container_name: scalepulse-gateway
+    ports:
+      - "8000:8000"
+    env_file:
+      - path: .env
+        required: false
+    restart: unless-stopped
+
+  # Redis, Kafka (KRaft), and Postgres are added on their dedicated days.
