@@ -12,3 +12,4 @@ build/
 benchmarks/results/
 .DS_Store
 .idea/
+summary.md
