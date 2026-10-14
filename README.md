@@ -66,3 +66,6 @@ without printing it in the command output.
 Study notes and the historical Day 1 benchmark live separately in [docs](docs/README.md). The
 sliding-window design, cache behavior, and trade-offs are described in
 [docs/rate-limiting.md](docs/rate-limiting.md).
+
+Import the [Bruno-compatible API collection](bruno/ScalePulse.postman_collection.json) to explore
+the gateway endpoints.

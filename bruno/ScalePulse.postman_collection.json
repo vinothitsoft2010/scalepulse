@@ -1,0 +1,144 @@
+{
+  "info": {
+    "_postman_id": "f57159ca-98b9-4c23-9f1a-1a46a3b5cb5d",
+    "name": "ScalePulse Gateway",
+    "description": "Postman Collection v2.1 compatible with Bruno. Set adminToken and apiKey collection variables before calling protected endpoints.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8000" },
+    { "key": "adminToken", "value": "replace-with-SCALEPULSE_ADMIN_TOKEN" },
+    { "key": "apiKey", "value": "replace-with-one-time-issued-api-key" },
+    { "key": "tenantId", "value": "4832be88-3f02-424e-b60d-53a9e5e7fff0" },
+    { "key": "policyId", "value": "77cbd540-cf81-4806-b5c2-ebfb804bb169" },
+    { "key": "apiKeyId", "value": "replace-with-issued-api-key-uuid" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Liveness",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/health",
+            "description": "Liveness check; does not require PostgreSQL or Redis."
+          }
+        },
+        {
+          "name": "Readiness",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/ready",
+            "description": "Readiness check. Returns 503 if PostgreSQL, Redis, or limiter secrets are unavailable."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Gateway",
+      "item": [
+        {
+          "name": "Get Resource (Rate Limited)",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-API-Key", "value": "{{apiKey}}", "type": "text" }
+            ],
+            "url": "{{baseUrl}}/api/v1/resource",
+            "description": "Send repeatedly to observe the configured limit. Allowed responses include X-RateLimit-* headers; excess requests return 429 and Retry-After."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Admin",
+      "item": [
+        {
+          "name": "Create Tenant",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{adminToken}}", "type": "text" },
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"example-tenant\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/v1/admin/tenants",
+            "description": "Create a tenant. Copy tenant_id from the response into the tenantId collection variable."
+          }
+        },
+        {
+          "name": "List Tenants",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{adminToken}}", "type": "text" }
+            ],
+            "url": "{{baseUrl}}/api/v1/admin/tenants?limit=50&offset=0"
+          }
+        },
+        {
+          "name": "Create Rate Limit Policy",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{adminToken}}", "type": "text" },
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"standard\",\n  \"request_limit\": 100,\n  \"window_ms\": 60000,\n  \"enabled\": true\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/v1/admin/tenants/{{tenantId}}/policies",
+            "description": "Create a policy. request_limit is the maximum requests in the window; window_ms is milliseconds. Copy policy_id from the response into policyId."
+          }
+        },
+        {
+          "name": "List Tenant Policies",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{adminToken}}", "type": "text" }
+            ],
+            "url": "{{baseUrl}}/api/v1/admin/tenants/{{tenantId}}/policies?limit=50&offset=0"
+          }
+        },
+        {
+          "name": "Issue API Key",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{adminToken}}", "type": "text" },
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/v1/admin/tenants/{{tenantId}}/policies/{{policyId}}/api-keys",
+            "description": "The api_key secret is returned only once. Save it as apiKey in a local Bruno environment, not in the shared collection. Copy api_key_id into the apiKeyId collection variable."
+          }
+        },
+        {
+          "name": "Revoke API Key",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{adminToken}}", "type": "text" }
+            ],
+            "url": "{{baseUrl}}/api/v1/admin/tenants/{{tenantId}}/api-keys/{{apiKeyId}}",
+            "description": "Revoke the key and invalidate its Redis policy cache and counter."
+          }
+        }
+      ]
+    }
+  ]
+}
