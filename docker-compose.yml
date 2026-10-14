@@ -8,6 +8,92 @@ services:
     env_file:
       - path: .env
         required: false
+    environment:
+      SCALEPULSE_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-scalepulse}:${POSTGRES_PASSWORD:-local-only-change-this}@postgres:5432/${POSTGRES_DB:-scalepulse}
+      SCALEPULSE_REDIS_URL: redis://redis:6379/0
+      SCALEPULSE_RATE_LIMIT_ENABLED: ${SCALEPULSE_RATE_LIMIT_ENABLED:-true}
+      SCALEPULSE_ADMIN_TOKEN: ${SCALEPULSE_ADMIN_TOKEN:-}
+      SCALEPULSE_API_KEY_PEPPER: ${SCALEPULSE_API_KEY_PEPPER:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     restart: unless-stopped
 
-  # Redis, Kafka (KRaft), and Postgres are added on their dedicated days.
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-scalepulse}
+      POSTGRES_USER: ${POSTGRES_USER:-scalepulse}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local-only-change-this}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  cassandra:
+    image: cassandra:5.0
+    profiles: [data]
+    environment:
+      CASSANDRA_CLUSTER_NAME: ScalePulseDev
+      CASSANDRA_DC: datacenter1
+      CASSANDRA_RACK: rack1
+      MAX_HEAP_SIZE: 1G
+      HEAP_NEWSIZE: 256M
+    ports:
+      - "127.0.0.1:${CASSANDRA_PORT:-9042}:9042"
+    volumes:
+      - cassandra_data:/var/lib/cassandra
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh 127.0.0.1 9042 -e 'SELECT release_version FROM system.local' >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      start_period: 90s
+      retries: 12
+    mem_limit: 3g
+    cpus: 2.0
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory
+      - 512mb
+      - --maxmemory-policy
+      - noeviction
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  cassandra-schema:
+    image: cassandra:5.0
+    profiles: [data]
+    depends_on:
+      cassandra:
+        condition: service_healthy
+    entrypoint: ["cqlsh"]
+    command: ["cassandra", "9042", "-f", "/schema/telemetry.cql"]
+    volumes:
+      - ./db/cassandra/telemetry.cql:/schema/telemetry.cql:ro
+
+volumes:
+  postgres_data:
+  cassandra_data:
+  redis_data:

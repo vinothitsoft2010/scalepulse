@@ -1,64 +1,68 @@
-# ScalePulse
+# ScalePulse Gateway
 
-Edge gateway middleware platform: Redis sliding-window rate limiting, Kafka telemetry ingestion,
-circuit breaking with DLQs, polyglot persistence (PostgreSQL + Cassandra), and an ops dashboard.
+ScalePulse is a FastAPI edge gateway with PostgreSQL-backed tenant, API-key, and rate-limit policy
+management; Redis-backed per-key sliding-window enforcement; and request latency headers.
 
-## Day 1 scope
+## Features
 
-- FastAPI gateway core with a pure ASGI latency interceptor (`x-scalepulse-latency-ms` header)
-- Smoke tests (pytest) and load tests (Locust)
-- Docker image + Compose (gateway only)
-- Baseline throughput/latency before Redis/Kafka are introduced
+- Exact sliding-window limits shared across workers through an atomic Redis Lua script.
+- High-entropy API keys, stored as HMAC-SHA-256 digests and returned only once.
+- Admin endpoints protected by a configurable bearer token.
+- `429` responses include `Retry-After` and rate-limit headers; Redis failures fail closed with 503.
+- `/health` is liveness-only; `/ready` checks PostgreSQL and Redis configuration/availability.
+- Pure ASGI latency measurement in `x-scalepulse-latency-ms`.
 
-## Layout
-
-```
-app/
-  main.py               # create_app() factory, middleware + routers
-  core/config.py        # Settings (SCALEPULSE_* env vars)
-  middleware/latency.py # LatencyHeaderMiddleware (pure ASGI)
-  api/health.py         # GET /health (unversioned, for LB/K8s probes)
-  api/v1/router.py      # GET /api/v1/resource (simulated downstream)
-tests/
-  unit/                 # pytest smoke tests
-  load/                 # Locust scenarios
-```
+Telemetry ingestion, Kafka, and Cassandra query services are not wired into the gateway yet.
 
 ## Quickstart
 
-Requires [uv](https://docs.astral.sh/uv/) and Docker.
+Requires [uv](https://docs.astral.sh/uv/), Docker, and OpenSSL. On first setup, copy
+`.env.example` to `.env`. Run `openssl rand -hex 32` twice and put the two generated values in
+`.env` as `SCALEPULSE_ADMIN_TOKEN` and `SCALEPULSE_API_KEY_PEPPER`. Keep both values private.
 
 ```sh
-cp .env.example .env
-make install      # uv sync (installs Python 3.12 if needed)
-make run          # dev server with reload on :8000
+uv sync
+make docker-up
 make test
 make lint
-make docker-up    # containerized gateway on :8000
+curl -i http://localhost:8000/ready
 ```
 
-Benchmark (in a second terminal, against the non-reload server). Use port 8001 natively if the
-Docker gateway already holds 8000:
+Run `make test-integration` with Redis running to verify the atomic concurrent limit behavior.
+
+`make docker-up` applies PostgreSQL migrations and starts the gateway, PostgreSQL, and Redis with
+persistent volumes. Cassandra is optional; start it with `make cassandra-up` and apply its schema
+with `make cassandra-schema`. `make docker-down` stops the services but preserves volumes.
+
+## Provision a Key
+
+Admin endpoints require `Authorization: Bearer $SCALEPULSE_ADMIN_TOKEN`. Create a tenant, a policy,
+and a key in order. The API key secret is returned only once; save it securely.
 
 ```sh
-make run-prod WORKERS=4 PORT=8001
-make bench PORT=8001 NAME=native-w4 PROCESSES=4
+curl -X POST http://localhost:8000/api/v1/admin/tenants \
+  -H "Authorization: Bearer $SCALEPULSE_ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"example-tenant"}'
+
+curl -X POST http://localhost:8000/api/v1/admin/tenants/<TENANT_ID>/policies \
+  -H "Authorization: Bearer $SCALEPULSE_ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"standard","request_limit":100,"window_ms":60000}'
+
+curl -X POST http://localhost:8000/api/v1/admin/tenants/<TENANT_ID>/policies/<POLICY_ID>/api-keys \
+  -H "Authorization: Bearer $SCALEPULSE_ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{}'
 ```
 
-CSV results are written to `benchmarks/results/<NAME>_*.csv`. Use `PROCESSES=4` or more; a
-single Locust process tops out around 16k RPS and becomes the bottleneck.
+Send the returned secret as `X-API-Key` to `/api/v1/resource`. Limits are per key, shared through
+Redis, and policies use milliseconds. Revoke a key with
+`DELETE /api/v1/admin/tenants/<TENANT_ID>/api-keys/<API_KEY_ID>`.
 
-## Baseline (Day 1)
+For Locust, put the issued test key in `.env` as `SCALEPULSE_BENCH_API_KEY`; `make bench` loads it
+without printing it in the command output.
 
-Machine: Apple M3 Pro, 11 cores, 18 GB RAM (Docker VM: 11 CPUs, ~7.7 GB) — Date: 2026-10-08
-
-Locust: 200 users, spawn rate 50, 60s, 4 processes, 90% `/api/v1/resource` + 10% `/health`.
-
-| Target         | Workers | RPS    | p50 (ms) | p95 (ms) | p99 (ms) | Errors |
-|----------------|---------|--------|----------|----------|----------|--------|
-| Native uvicorn | 1       | 17,557 | 7        | 13       | 19       | 0%     |
-| Native uvicorn | 4       | 39,661 | 1        | 3        | 4        | 0%     |
-| Docker         | 4       | 22,482 | 4        | 18       | 32       | 0%     |
-
-Notes: Locust shares the CPU with the server on a laptop, so treat numbers as relative.
-Docker Desktop on macOS adds VM and port-forwarding overhead (~43% less RPS than native).
+Study notes and the historical Day 1 benchmark live separately in [docs](docs/README.md). The
+sliding-window design, cache behavior, and trade-offs are described in
+[docs/rate-limiting.md](docs/rate-limiting.md).
